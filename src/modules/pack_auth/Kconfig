@@ -1,0 +1,33 @@
+menuconfig MODULES_PACK_AUTH
+	bool "pack_auth"
+	default n
+	depends on PLATFORM_NUTTX
+	---help---
+		Battery pack authentication: every required pack must prove it is genuine before
+		the vehicle can be armed. Needs smartpack_key.h (bash setup.sh key).
+
+if MODULES_PACK_AUTH
+
+config PACK_AUTH_UNSIGNED_COUNT
+	bool "Do not require a signature on PKA_NUM"
+	default n
+	---help---
+		By default PKA_NUM only counts if it carries a signature made with the pack key for this
+		autopilot (PKA_S0..S3), so nobody can lower it without the key. Select this only for bench work.
+
+config PACK_AUTH_NUM_MIN
+	int "Minimum number of packs"
+	default 1
+	range 1 5
+	---help---
+		Firmware floor: PKA_NUM can never be set below this.
+
+config PACK_AUTH_MIN_FLIGHT_S
+	int "Armed seconds that count as one use of the packs"
+	default 30
+	range 0 3600
+	---help---
+		The packs' use counter is incremented when the vehicle disarms after being armed at
+		least this long. 0 counts every arm.
+
+endif

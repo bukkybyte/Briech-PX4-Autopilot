@@ -154,6 +154,7 @@ set(msg_files
 	OrbTest.msg
 	OrbTestLarge.msg
 	OrbTestMedium.msg
+	PackAuthStatus.msg
 	ParameterResetRequest.msg
 	ParameterSetUsedRequest.msg
 	ParameterSetValueRequest.msg

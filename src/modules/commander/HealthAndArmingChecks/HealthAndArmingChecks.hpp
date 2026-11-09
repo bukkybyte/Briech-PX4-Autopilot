@@ -73,6 +73,10 @@
 #include "checks/offboardCheck.hpp"
 #include "checks/openDroneIDCheck.hpp"
 #include "checks/externalChecks.hpp"
+#include <px4_platform_common/px4_config.h>   // CONFIG_MODULES_PACK_AUTH must be defined before the #if below
+#if CONFIG_MODULES_PACK_AUTH   // [PX4_PackAuth] include
+#include "checks/packAuthCheck.hpp"
+#endif
 
 class HealthAndArmingChecks : public ModuleParams
 {
@@ -161,7 +165,11 @@ private:
 	ExternalChecks _external_checks;
 #endif
 
-	HealthAndArmingCheckBase *_checks[40] = {
+#if CONFIG_MODULES_PACK_AUTH   // [PX4_PackAuth] member
+	PackAuthChecks _pack_auth_checks;
+#endif
+
+	HealthAndArmingCheckBase *_checks[41] = {   // [PX4_PackAuth] list size
 #ifndef CONSTRAINED_FLASH
 		&_external_checks,
 #endif
@@ -197,5 +205,8 @@ private:
 		&_flight_time_checks,
 		&_rc_and_data_link_checks,
 		&_vtol_checks,
+#if CONFIG_MODULES_PACK_AUTH   // [PX4_PackAuth] list entry
+		&_pack_auth_checks,
+#endif
 	};
 };

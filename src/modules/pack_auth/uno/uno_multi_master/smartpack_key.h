@@ -1,0 +1,9 @@
+// SmartPack shared secret. Must be identical on every pack and in the ArduPilot build.
+// Keep this file out of git.
+#pragma once
+#include <stdint.h>
+
+static const uint8_t SMARTPACK_KEY[16] = {
+    0xa5, 0x68, 0x4b, 0x4d, 0x80, 0x38, 0x04, 0x4c,
+    0x97, 0x6c, 0xa9, 0x0d, 0x82, 0xf2, 0xfe, 0x35,
+};

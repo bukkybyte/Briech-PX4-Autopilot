@@ -39,6 +39,10 @@
  */
 
 #include "Commander.hpp"
+#include <px4_platform_common/px4_config.h>   // CONFIG_MODULES_PACK_AUTH must be defined before the #if below
+#if CONFIG_MODULES_PACK_AUTH   // [PX4_PackAuth] gate include
+#include <modules/pack_auth/pack_auth_gate.h>
+#endif
 
 /* commander module headers */
 #include "Arming/ArmAuthorization/ArmAuthorization.h"
@@ -562,6 +566,30 @@ transition_result_t Commander::arm(arm_disarm_reason_t calling_reason, bool run_
 		tune_negative(true);
 		return TRANSITION_DENIED;
 	}
+
+#if CONFIG_MODULES_PACK_AUTH   // [PX4_PackAuth] arming gate: not skippable (forced arm, arm-on-boot, RC re-arm grace)
+	{
+		pack_auth_status_s pack_status{};
+		const bool have_pack_status = _pack_auth_status_sub.copy(&pack_status);
+		const PackAuthGateResult pack_gate = pack_auth_gate_evaluate(have_pack_status, pack_status, hrt_absolute_time());
+
+		if (!pack_gate.open) {
+			tune_negative(true);
+
+			if (pack_gate.pack) {
+				mavlink_log_critical(&_mavlink_log_pub, "Arming denied: Pack %u: %s\t", (unsigned)pack_gate.pack,
+						     pack_auth_reason_str(pack_gate.reason));
+
+			} else {
+				mavlink_log_critical(&_mavlink_log_pub, "Arming denied: Pack auth: %s\t", pack_auth_reason_str(pack_gate.reason));
+			}
+
+			events::send(events::ID("commander_arm_denied_pack_auth"), {events::Log::Critical, events::LogInternal::Info},
+				     "Arming denied: battery pack authentication failed");
+			return TRANSITION_DENIED;
+		}
+	}
+#endif
 
 	// allow a grace period for re-arming: preflight checks don't need to pass during that time, for example for accidental in-air disarming
 	if (calling_reason == arm_disarm_reason_t::rc_switch
