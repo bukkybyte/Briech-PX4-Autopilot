@@ -4,10 +4,8 @@ A battery pack has to prove it is genuine before the flight controller will arm.
 carries a small record (serial, set, activation date, use count, max count) that you can read and
 the aircraft can read and enforce.
 
-This is the PX4 version of the ArduPilot `AP_PackAuth` kit. **The packs, the protocol, the key and the
-Nano/Uno sketches are the same**, so a pack provisioned for one flies on the other (the shared
-`smartpack_proto.h` is byte-identical). What changed is the autopilot side: a PX4 module, a hook in
-Commander, and a PX4 installer.
+The pack side runs on an Arduino Nano today and is planned to move to an STM32 (or a similar MCU) later;
+see "Moving the pack to an STM32". Nothing on the PX4 side changes for that.
 
 This folder is **everything**: the module, the pack firmware, the bench-test sketch, the tools and this
 guide. It lives in `<px4>/src/modules/pack_auth/` and is committed to your PX4 fork; only the key stays
@@ -68,7 +66,7 @@ main. Do the build and the bench tests (see "Testing") before anything else.
 host simulator. `pack_auth.cpp` binds it to PX4 (I2C, parameters, uORB). `pack_auth_gate.h` is the
 fail-closed decision Commander makes on the published status (missing or older than 2 s = closed).
 
-### I2C protocol v2 (`smartpack_proto.h`, identical on every device and on the ArduPilot side)
+### I2C protocol v2 (`smartpack_proto.h`, identical on the pack, the test master and the autopilot)
 
 | Reg | Dir | Content |
 |---|---|---|
@@ -133,7 +131,7 @@ checked on main of 7 Nov 2026.
 ### A. Your fork already has this on a branch (normal case)
 
 ```bash
-git clone --recurse-submodules -b packauth https://github.com/<you>/PX4-Autopilot ~/px4
+git clone --recurse-submodules -b packauth https://github.com/bukkybyte/Briech-PX4-Autopilot ~/px4
 cd ~/px4/src/modules/pack_auth
 cp /safe/place/smartpack_key.h .      # your key (the same one every pack uses); or: bash setup.sh key
 bash setup.sh sync                    # key + protocol header into the Nano and Uno sketch folders
@@ -143,17 +141,6 @@ cd ~/px4 && make cubepilot_cubeorange_default
 Flash `build/cubepilot_cubeorange_default/cubepilot_cubeorange_default.px4` (QGroundControl: Vehicle Setup >
 Firmware > Advanced settings > Custom firmware file).
 
-### B. Add it to a clean PX4 tree
-
-```bash
-cd ~/px4                               # a v1.17.0 checkout with submodules
-unzip PX4_PackAuth.zip -d src/modules/ && mv src/modules/PX4_PackAuth src/modules/pack_auth
-cd src/modules/pack_auth
-bash setup.sh key                      # random key (replaces the public dev key)
-bash setup.sh install --dry-run        # shows what will be edited
-bash setup.sh install                  # edits 6 source files, adds 3, and adds the board config + start line; safe to repeat
-cd ~/px4 && make cubepilot_cubeorange_default
-```
 `install` options: `--board <vendor/model>` (repeatable, default `cubepilot/cubeorange`), `--unsigned`
 (plain `PKA_NUM`, no signature; bench work), `--min-flight <s>`, `--dry-run`. It also recognises the same
 edits made by hand. If an anchor is not found it makes no edit and prints the snippet to add yourself
@@ -204,8 +191,10 @@ HV = 5 V, common GND), pull-ups on both sides, 4.7-10 kOhm. Identify SDA/SCL on 
 (GND and +5 V are the other two pins). Never feed a 5 V line into the Cube side.
 
 **Cube.** PX4 numbers I2C buses from 1; on the Cube Orange both I2C buses are external. With the packs
-connected, read the boot messages (MAVLink console / QGC): `PackAuth: count not signed, detecting`, then
-`PackAuth: N pack(s) detected` and `PackAuth cfg-id: <24 hex>`. Sign the count for that autopilot:
+connected, wait for `PackAuth: count not signed, detecting`, then `PackAuth: N pack(s) detected` and
+`PackAuth cfg-id: <24 hex>`. The cfg-id is sent as a warning (QGC pops it up) and repeated every 10 s while
+the count is unsigned; it is also printed by `pack_auth status`, and shows in the QGC message log.
+Always sign from the cfg-id this autopilot reports. Sign the count for it:
 
 ```bash
 bash setup.sh sign <cfg-id> <N> > cube1.params
@@ -219,6 +208,37 @@ devices on the bus. `PKA_BUS` -1 scans every *external* I2C bus for each pack; s
 once you know it (`pack_auth status` shows `bus=`). To replace a pack, give the spare the dead pack's
 address (`a <addr>`), same set, unique serial. The Cube needs nothing: it sees the new serial and proves
 the slot again within seconds.
+
+## Moving the pack to an STM32
+
+The pack is just "something at an I2C address that follows `smartpack_proto.h`". The Cube cannot tell a
+Nano from an STM32, and packs of both kinds can be mixed in one set.
+
+**Stays the same, copy as is:** `smartpack_proto.h`, `smartpack_pack.h` (no Arduino dependencies: record
+handling, challenge, response, use report), `smartpack_key.h`, and everything on the Cube side. No PX4
+rebuild is needed.
+
+**Replace** (these are the only Nano-specific parts of `smartpack_nano.ino`):
+
+| Nano code | On an STM32 |
+|---|---|
+| `Wire` as I2C slave, `onReceive` / `onRequest` | the I2C peripheral in slave mode at the configured 7-bit address. Writes to a register number select it; reads return that register (see the protocol table). The pack must not hold the clock low while it hashes: report `STATUS = busy` and let the Cube poll. Check your family's reference manual for the slave clock-stretching and underrun rules. |
+| `EEPROM.get/put` for the record, and for the address | most STM32 parts have no EEPROM: use two flash pages with a simple log or an EEPROM-emulation library; some families (L0, L1) have data EEPROM. The record is written about once per flight, so endurance is not the limit: with `max_count` of 500 that is about 500 writes, far below the flash datasheet's erase-cycle figure. Write the count and a check value together so a power cut cannot leave a torn record. |
+| `millis()` | SysTick |
+| serial console (`n g d m a p c t ...`) | keep the same commands over a UART or USB serial, so provisioning is done the same way |
+
+**Electrical.** An STM32 pack MCU runs at 3.3 V like the Cube, so the BSS138 level shifter is not needed if
+the whole pack side is 3.3 V. Keep one set of 4.7-10 kOhm pull-ups to 3.3 V on the bus (do not add a set
+per pack), and check that the I2C pins are 3.3 V only before connecting anything.
+
+**Key protection.** Set the flash readout protection (RDP) before the pack goes out, and confirm on your part
+what each level allows (a debugger can still read an unprotected part, and the highest level is permanent).
+Without it the key can be read out over SWD, exactly as it can over ISP on an unlocked ATmega.
+
+**Check the port.** Make it print the same self-test as the Nano (`self-test response: 672EDC8C1FB809AF` with
+the dev key), then run it against the Uno test master (`uno_multi_master`), then against the Cube. The host
+test `bash setup.sh test` already checks the shared protocol and pack code, so a port that only swaps the
+glue should keep it passing. Re-run the tamper, unplug and use-report tests with the new pack.
 
 ## Configuration
 
@@ -261,7 +281,8 @@ proof valid 8 s, status valid 2 s, 5 attempts to report a use.
 
 1. `bash setup.sh key` and rebuild: the shipped dev key is public. Changing it later means redoing every
    pack and every signed autopilot.
-2. Set the ATmega lock bits on the packs so the key cannot be read out over ISP.
+2. Lock the pack MCU so the key cannot be read out: ATmega lock bits on the Nano, readout protection on an
+   STM32 (see below).
 3. Do not use `CONFIG_PACK_AUTH_UNSIGNED_COUNT` on a flying build.
 4. Re-run the gate, tamper, unplug and `pack_auth stop` tests on the final build.
 
@@ -270,21 +291,6 @@ proof valid 8 s, status valid 2 s, 5 attempts to report a use.
 Not measured. The module is one task with a 3 KB stack (`PX4_STACK_ADJUSTED(3000)`), a hash takes
 microseconds, and I2C is about 4-5 ms per pack every 3 s with nothing in flight. Measure on your build:
 compare the image size with `CONFIG_MODULES_PACK_AUTH` n and y, and watch `top` / the logged CPU load.
-
-## Differences from the ArduPilot kit
-
-| | ArduPilot (`AP_PackAuth`) | PX4 (`pack_auth`) |
-|---|---|---|
-| Gate | `AP_Arming::arm()` | `Commander::arm()` + a `HealthAndArmingChecks` check |
-| Parameters | `ARMING_PKA_*`, signature words signed int16 | `PKA_*`, signature words unsigned 0..65535 |
-| Param file / tool | Mission Planner `name,value` | QGC `.params` (or `param set` lines) |
-| Bus numbering, scan | from 0, all buses | from 1, external buses only |
-| Switches | `hwdef.dat` defines | `.px4board` Kconfig |
-| Debug text | `AP_PACKAUTH_DEBUG` | `pack_auth status` command, logged `pack_auth_status` |
-| Unique id used for the signature | 12-byte chip id | 12-byte chip id (`board_get_uuid`) |
-| Packs, key, protocol, sketches | same | same |
-
-Always sign from the cfg-id the PX4 build itself prints; do not reuse a signature made for an ArduPilot build of the same Cube.
 
 ## Limits
 
@@ -298,5 +304,6 @@ Always sign from the cfg-id the PX4 build itself prints; do not reuse a signatur
 
 ## Roadmap
 
-CAN transport (the nonce, MAC, record and gate stay; only the I2C reads and writes change), an I2C
+an STM32 pack (above), CAN transport (STM32 parts have CAN; the nonce, MAC, record and gate stay and only
+the I2C reads and writes change), an I2C
 multiplexer or coding pins for address-free pack swaps, binding the set id into the signed config.
