@@ -111,3 +111,4 @@ log/
 keys/
 /src/modules/pack_auth/smartpack_key.h
 /src/modules/pack_auth/smartpack_key.h.example
+Tools/setup/*.tar.xz*
