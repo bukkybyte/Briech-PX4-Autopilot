@@ -130,7 +130,15 @@ bool PackAuth::armed()
 void PackAuth::user_message(const char *text)
 {
 	PX4_INFO("%s", text);
-	mavlink_log_info(&_mavlink_log_pub, "%s\t", text);
+
+	// the provisioning id is what the operator has to copy: warning severity so QGC pops it up
+	// (info lines only go to its message log)
+	if (strstr(text, "cfg-id") != nullptr) {
+		mavlink_log_warning(&_mavlink_log_pub, "%s\t", text);
+
+	} else {
+		mavlink_log_info(&_mavlink_log_pub, "%s\t", text);
+	}
 }
 
 pack_auth::Config PackAuth::get_config()
@@ -205,6 +213,19 @@ int PackAuth::print_status()
 
 	} else {
 		PX4_INFO("gate: closed, %s", pack_auth_reason_str(g.reason));
+	}
+
+	{
+		uint8_t uid[12] {};
+		char hex[2 * 12 + 1] {};
+
+		if (unique_id(uid)) {
+			for (uint8_t i = 0; i < sizeof(uid); i++) {
+				snprintf(&hex[2 * i], 3, "%02x", uid[i]);
+			}
+		}
+
+		PX4_INFO("cfg-id: %s", hex);
 	}
 
 	PX4_INFO("required packs: %u%s", (unsigned)_core.num_required(),
